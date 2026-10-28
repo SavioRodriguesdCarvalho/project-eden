@@ -1,22 +1,12 @@
-import os
-
-os.environ["VISPY_GL_BACKEND"] = "gl2"
-os.environ["QT_QPA_PLATFORM"] = "xcb"
-
 import numpy as np
-import vispy
-
-vispy.use(app = "pyqt6", gl = "gl2")
-
-from vispy import app, scene
+import pyvista as pv
 
 from eden.geology.terrain import TerrainGenerator
 from eden.planet_profile import generate_profile
 from eden.planet.planet import Planet
 
-
 def generate_planet():
-    seed = 4
+    seed = 10
     profile = generate_profile(seed)
     planet = Planet(profile, subdivision = 6)
 
@@ -25,36 +15,21 @@ def generate_planet():
 
     return planet
 
-
 def interpolate_colors(values, stops):
     positions = np.array([stop[0] for stop in stops])
     colors = np.array([stop[1] for stop in stops], dtype = np.float32)
 
-    result = np.empty((len(values), 4), dtype = np.float32)
+    result = np.empty((len(values), 4), dtype=np.float32)
 
     for channel in range(4):
-        result[:, channel] = np.interp(
-            values,
-            positions,
-            colors[:, channel],
-        )
+        result[:, channel] = np.interp(values, positions, colors[:, channel])
 
     return result
 
-
 def prepare_mesh(planet):
-    vertices = np.asarray(
-        planet.icosphere.vertices,
-        dtype = np.float32,
-    )
-    faces = np.asarray(
-        planet.icosphere.faces,
-        dtype = np.uint32,
-    )
-    elevation = np.asarray(
-        planet.surface.elevation,
-        dtype = np.float32,
-    )
+    vertices = np.asarray(planet.icosphere.vertices, dtype = np.float32)
+    faces = np.asarray(planet.icosphere.faces, dtype = np.int64)
+    elevation = np.asarray(planet.surface.elevation, dtype = np.float32)
     sea_level = float(planet.surface.sea_level)
 
     vertex_elevation = np.zeros(len(vertices), dtype = np.float32)
@@ -77,9 +52,7 @@ def prepare_mesh(planet):
     max_relief = max(float(np.max(np.abs(relative_elevation))), 1.0)
 
     relief_strength = 0.10
-    radius_factor = 1.0 + (
-        relative_elevation / max_relief
-    ) * relief_strength
+    radius_factor = 1.0 + (relative_elevation / max_relief) * relief_strength
 
     deformed_vertices = directions * radius_factor[:, None]
 
@@ -103,56 +76,49 @@ def prepare_mesh(planet):
         (6000.0, [0.91, 0.91, 0.88, 1.0]),
     ]
 
-    face_colors = np.empty((len(faces), 4), dtype=np.float32)
+    face_colors = np.empty((len(faces), 4), dtype = np.float32)
     underwater = elevation < sea_level
 
     if np.any(underwater):
         face_colors[underwater] = interpolate_colors(
             depth[underwater],
-            water_stops,
+            water_stops
         )
 
     if np.any(~underwater):
         face_colors[~underwater] = interpolate_colors(
             height[~underwater],
-            land_stops,
+            land_stops
         )
 
     return deformed_vertices, faces, face_colors
 
-
 def visualize_planet(planet):
     vertices, faces, colors = prepare_mesh(planet)
 
-    canvas = scene.SceneCanvas(
-        title = "Project Eden — Planet Viewer",
-        keys = "interactive",
-        size = (1200, 850),
-        bgcolor = "#101820",
-        show = True,
+    vtk_faces = np.column_stack((np.full(len(faces), 3, dtype=np.int64), faces)).ravel()
+
+    mesh = pv.PolyData(vertices, vtk_faces)
+
+    rgba_colors = np.clip(colors * 255, 0, 255).astype(np.uint8)
+
+    mesh.cell_data["colors"] = rgba_colors
+
+    plotter = pv.Plotter(window_size = (1200, 850), title = "Project Eden - Planet Viewer")
+
+    plotter.set_background("#101820")
+
+    plotter.add_mesh(
+        mesh,
+        scalars = "colors",
+        rgba = True,
+        show_edges = False,
+        smooth_shading = True,
     )
 
-    view = canvas.central_widget.add_view()
-    view.camera = scene.TurntableCamera(
-        fov = 45,
-        elevation = 25,
-        azimuth = 35,
-        distance = 3.2,
-        up = "z",
-    )
-
-    scene.visuals.Mesh(
-        vertices = vertices,
-        faces = faces,
-        face_colors = colors,
-        shading = "smooth",
-        parent = view.scene,
-    )
-
-    scene.visuals.XYZAxis(
-        parent = view.scene,
-        width = 2,
-    )
+    plotter.add_axes()
+    plotter.camera_position = "iso"
+    plotter.camera.zoom(1.2)
 
     elevation = np.asarray(planet.surface.elevation)
     sea_level = float(planet.surface.sea_level)
@@ -165,13 +131,22 @@ def visualize_planet(planet):
     print(f"Elevação mínima: {elevation.min():.2f} m")
     print(f"Elevação máxima: {elevation.max():.2f} m")
     print(f"Área superficial em terra: {np.mean(land) * 100:.2f}%")
+
+    print("Renderizador OpenGL:")
+    try:
+        plotter.render()
+        print(plotter.ren_win.ReportCapabilities())
+    except Exception as error:
+        print(f"Não foi possível consultar o renderizador: {error}")
+
     print("Controles: arraste para girar e use a roda do mouse para zoom.")
 
-    app.run()
+    plotter.show()
 
 def main():
     planet = generate_planet()
     visualize_planet(planet)
+
 
 if __name__ == "__main__":
     main()

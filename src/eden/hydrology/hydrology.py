@@ -100,12 +100,11 @@ class Hydrology:
 
         et_mm = np.zeros(face_count, dtype=np.float64)
         outflow_mm = np.zeros(face_count, dtype=np.float64)
-        # Acumula volume (mm × área); a conversão para profundidade ocorre
-        # apenas na saída de cada face, preservando água entre áreas distintas.
         available_volume = np.where(land, np.maximum(precipitation_mm, 0.0) * areas, 0.0)
         for face_id in reversed(self.flow_order):
             if not land[face_id]:
                 continue
+
             available = available_volume[face_id]
             available_depth = available / areas[face_id]
             et_depth = min(max(et_demand_mm[face_id], 0.0), evaporation_fraction * available_depth)
@@ -121,4 +120,53 @@ class Hydrology:
             "et_mm": et_mm,
             "outflow_mm": outflow_mm,
             "available_mm": available_volume / areas,
+        }
+
+    def route_runoff(self, planet, flow_to, runoff_mm, face_area = None):
+        elevation = np.asarray(planet.surface.elevation, dtype = np.float64)
+        face_count = len(elevation)
+        land = elevation >= planet.surface.sea_level
+
+        flow_to = np.asarray(flow_to, dtype = np.int64)
+        runoff_mm = np.asarray(runoff_mm, dtype = np.float64)
+
+        if flow_to.shape != (face_count):
+            raise ValueError("O fluxo deve conter um destino por face.")
+        if runoff_mm.shape != (face_count):
+            raise ValueError("A drenagem deve conter um valor por face.")
+        if not np.all(np.isfinite(runoff_mm)) or np.any(runoff_mm < 0):
+            raise ValueError("A drenagem deve ser finita e não negativa.")
+
+        if face_area is None:
+            areas = np.ones(face_count, dtype = np.float64)
+        else:
+            areas = np.asarray(face_area, dtype = np.float64)
+
+            if (
+                areas.shape != (face_count)
+                or not np.all(np.isfinite(areas))
+                or np.any(areas <= 0)
+            ):
+                raise ValueError("As áreas devem ser finitas e positivas.")
+
+        runoff_volume = np.where(land, runoff_mm * areas, 0.0)
+        routed_outflow_mm = np.zeros(face_count, dtype = np.float64)
+        external_volume_m3 = 0.0
+
+        for face_id in reversed(self.flow_order):
+            if not land[face_id]:
+                continue
+
+            volume = runoff_volume[face_id]
+            routed_outflow_mm[face_id] = volume / areas[face_id]
+            downstream = int(flow_to[face_id])
+
+            if downstream >= 0 and land[downstream]:
+                runoff_volume[downstream] += volume
+            else:
+                external_volume_m3 += volume / 1000.0
+
+        return {
+            "outflow_mm": routed_outflow_mm,
+            "external_runoff_volume_m3": external_volume_m3
         }

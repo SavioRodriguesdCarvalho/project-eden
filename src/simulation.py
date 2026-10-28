@@ -5,6 +5,8 @@ from src.eden.precipitation.precipitation import Precipitation
 from src.eden.atmosphere.atmosphere import Atmosphere
 from src.eden.hydrology.hydrology import Hydrology
 from src.eden.climate.climate import Climate
+from src.eden.state import PlanetState
+from src.eden.soil import Soil
 
 @dataclass
 class SeasonResult:
@@ -42,7 +44,8 @@ class PlanetSimulation:
         reference_ocean_evaporation_mm = 1200.0,
         land_evapotranspiration_demand_mm = 300.0,
         atmosphere_iterations = 80,
-        evaporation_fraction = 1.0
+        evaporation_fraction = 1.0,
+        soil = None
     ):
         self.climate = climate or Climate()
         self.atmosphere = atmosphere or Atmosphere()
@@ -53,6 +56,7 @@ class PlanetSimulation:
         self.land_evapotranspiration_demand_mm = float(land_evapotranspiration_demand_mm)
         self.atmosphere_iterations = int(atmosphere_iterations)
         self.evaporation_fraction = float(evaporation_fraction)
+        self.soil = soil if soil is not None else Soil()
 
         if not np.isfinite(self.reference_ocean_evaporation_mm) or self.reference_ocean_evaporation_mm <= 0:
             raise ValueError("A evaporação oceânica de referência deve ser finita e positiva.")
@@ -99,7 +103,7 @@ class PlanetSimulation:
             return 0.0
         return float(np.average(values[valid], weights = weights[valid]))
 
-    def _calibrate_precipitation(self, planet, condensed, areas_m2):
+    def _calibrate_precipitation(self, planet, condensed, areas_m2, timestep_fraction = 1.0):
         elevation = np.asanyarray(planet.surface.elevation, dtype = np.float64)
         areas_m2 = np.asanyarray(areas_m2, dtype = np.float64)
         condensed = np.asanyarray(condensed, dtype = np.float64)
@@ -125,8 +129,8 @@ class PlanetSimulation:
         if total_condensation <= 0.0:
             raise ValueError("Não houve condensação para calibrar a precipitação.")
 
-        target_volume_mm_m2 = self.reference_ocean_evaporation_mm * ocean_area
-        calibration_factor = target_volume_mm_m2 / total_condensation
+        target_ocean_colume = (self.reference_ocean_evaporation_mm * timestep_fraction * ocean_area)
+        calibration_factor = target_ocean_colume / total_condensation
 
         self.precipitation.calculate_from_condensation(planet, condensed, calibration_factor = calibration_factor)
 
